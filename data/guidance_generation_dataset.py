@@ -8,7 +8,6 @@ import torchvision
 import numpy as np
 import torch
 import random
-import albumentations as A
 import copy
 import cv2
 import pandas as pd
@@ -85,7 +84,7 @@ def is_image(file):
 # used to train image-to-text mapper
 class UnpairedLQHQDataset(Dataset):
     def __init__(self,
-                 dataroot_list,
+                 csv_path,  # <- 修改1：增加csv_path参数
                  tokenizer,
                  size=512,
                  interpolation="bicubic",
@@ -93,56 +92,34 @@ class UnpairedLQHQDataset(Dataset):
                  template="a photo of a {}"):
         super(UnpairedLQHQDataset, self).__init__()
 
-        self.dataroot_list = dataroot_list
+        # 修改2：从csv加载数据路径和标题
+        self.df = pd.read_csv(csv_path, sep='\t')  # 假设csv用制表符分隔
+        self.image_paths = self.df['filepath'].tolist()
+        self.titles = [x.split(":")[0].strip() for x in self.df['title']]  # 提取冒号前的描述
+
+        # 修改3：调整类成员变量
+        self.num_images = len(self.image_paths)
+        self._length = self.num_images
+        self.tokenizer = tokenizer
+        self.size = size
+        self.interpolation = {
+            "linear": PIL_INTERPOLATION["linear"],
+            "bilinear": PIL_INTERPOLATION['bilinear'],
+            "bicubic": PIL_INTERPOLATION["bicubic"],
+            "lanczos": PIL_INTERPOLATION["lanczos"]
+        }[interpolation]
+
+        
+        # 废弃原来的路径收集逻辑
+        # self.dataroot_list = dataroot_list
+        # self.image_paths = []
+        # for dataroot in self.dataroot_list:
+        #     self.image_paths.extend(sorted(glob.glob(os.path.join(dataroot, "*"))))
+        """
         self.tokenizer = tokenizer
         self.size = size
         self.placeholder_token = placeholder_token
         self.patch_size = size
-
-        self.image_paths = []
-
-        for dataroot in self.dataroot_list:
-            self.image_paths.extend(sorted(glob.glob(os.path.join(dataroot, "*"))))
-
-        # self.hq_paths = []
-        # self.deblur_paths = []
-        # self.derain_paths = []
-        # self.dehaze_paths = []
-        #
-        # hq_dataroot = os.path.join(self.dataroot, "hq")
-        # deblur_dataroot = os.path.join(self.dataroot, "deblur")
-        # derain_dataroot = os.path.join(self.dataroot, "derain")
-        # dehaze_dataroot = os.path.join(self.dataroot, "dehaze")
-        #
-        # hq_folders = sorted(glob.glob(os.path.join(hq_dataroot, "*")))
-        # deblur_folders = sorted(glob.glob(os.path.join(deblur_dataroot, "*")))
-        # derain_folders = sorted(glob.glob(os.path.join(derain_dataroot, "*")))
-        #
-        # for folder in hq_folders:
-        #     self.hq_paths.extend(sorted(glob.glob(os.path.join(folder, "*"))))
-        #
-        # for folder in deblur_folders:
-        #     self.deblur_paths.extend(sorted(glob.glob(os.path.join(folder, "LQ", "*"))))
-        #
-        # for folder in derain_folders:
-        #     self.derain_paths.extend(sorted(glob.glob(os.path.join(folder, "LQ", "*"))))
-        #
-        # dehaze_indoor_meta_info_file = os.path.join(self.dataroot, "dehaze", "indoor", "meta_info.txt")
-        # dehaze_outdoor_meta_info_file = os.path.join(self.dataroot, "dehaze", "outdoor", "meta_info.txt")
-        # with open(dehaze_indoor_meta_info_file) as f:
-        #     contents = f.readlines()
-        #     haze_names_indoor = [i.strip() for i in contents]
-        #     gt_names_indoor = [i.split('_')[0] for i in haze_names_indoor]  # haze_names#
-        # self.dehaze_paths.extend([os.path.join(dehaze_dataroot, "indoor", "LQ", i) for i in haze_names_indoor])
-        #
-        # with open(dehaze_outdoor_meta_info_file) as f:
-        #     contents = f.readlines()
-        #     haze_names_outdoor = [i.strip() for i in contents]
-        #     gt_names_outdoor = [i.split('_')[0] for i in haze_names_outdoor]  # haze_names#
-        # self.dehaze_paths.extend([os.path.join(dehaze_dataroot, "outdoor", "LQ", i) for i in haze_names_outdoor])
-        #
-        # self.num_images = len(self.hq_paths) + len(self.hq_paths) + len(self.deblur_paths)\
-        #                   + len(self.derain_paths) + len(self.dehaze_paths)
 
         self.num_images = len(self.image_paths)
         self._length = self.num_images
@@ -155,6 +132,7 @@ class UnpairedLQHQDataset(Dataset):
         }[interpolation]
 
         self.template = template
+        """
 
     def __len__(self):
         return self._length
@@ -183,48 +161,45 @@ class UnpairedLQHQDataset(Dataset):
         ###############################################################
         example = {}
 
-        placeholder_string = self.placeholder_token
-        text = self.template.format(placeholder_string)
-        example["text"] = text
+        # 修改4：使用csv中的真实文本
+        raw_text = self.titles[i % self.num_images]  # 直接使用标题中的描述
+        example["text"] = raw_text
 
-        placeholder_index = 0
-        words = text.strip().split(' ')
-        for idx, word in enumerate(words):
-            if word == placeholder_string:
-                placeholder_index = idx + 1
-
-        example["index"] = torch.tensor(placeholder_index)
+        # 修改5：简化tokenize流程（不需要占位符处理）
         example["input_ids"] = self.tokenizer(
-            text,
+            raw_text,  # 直接使用原始文本
             padding="max_length",
             truncation=True,
             max_length=self.tokenizer.model_max_length,
             return_tensors="pt",
         ).input_ids[0]
 
-        ###############################################################
+        # placeholder_string = self.placeholder_token
+        # text = self.template.format(placeholder_string)
+        # example["text"] = text
 
-        # # hq, denoise, deblur, derain, dehaze
-        # task = random.choice([0, 1, 2, 3, 4])
-        #
-        # if task == 0:
-        #     self.current_path = self.hq_paths[i % len(self.hq_paths)]
-        # elif task == 1:
-        #     self.current_path = self.hq_paths[i % len(self.hq_paths)]
-        # elif task == 2:
-        #     self.current_path = self.deblur_paths[i % len(self.deblur_paths)]
-        # elif task == 3:
-        #     self.current_path = self.derain_paths[i % len(self.derain_paths)]
-        # elif task == 4:
-        #     self.current_path = self.dehaze_paths[i % len(self.dehaze_paths)]
-        # else:
-        #     raise
+        # placeholder_index = 0
+        # words = text.strip().split(' ')
+        # for idx, word in enumerate(words):
+        #     if word == placeholder_string:
+        #         placeholder_index = idx + 1
 
+        # example["index"] = torch.tensor(placeholder_index)
+        # example["input_ids"] = self.tokenizer(
+        #     text,
+        #     padding="max_length",
+        #     truncation=True,
+        #     max_length=self.tokenizer.model_max_length,
+        #     return_tensors="pt",
+        # ).input_ids[0]
+
+        # 修改6：保留原有图像处理逻辑
         self.current_path = self.image_paths[i % self.num_images]
-        image = Image.open(self.current_path)
         image_name = self.current_path.split('/')[-1].split(".")[0]
 
         try:
+            image = Image.open(self.current_path)
+            
             if not image.mode == "RGB":
                 image = image.convert("RGB")
 
@@ -248,7 +223,6 @@ class UnpairedLQHQDataset(Dataset):
             ref_image_tensor_save = Image.fromarray(image_np.astype('uint8')).resize((512, 512), resample=self.interpolation)
 
             example["pixel_values_clip"] = self.get_tensor_clip()(ref_image_tensor)
-            example["pixel_values_clip_save"] = self.get_tensor_clip()(ref_image_tensor_save)
 
             example["image_name"] = image_name
 
@@ -300,11 +274,11 @@ class PairedLQHQDataset(Dataset):
             if task_ == "denoise":
                 self.image_paths_hq[task_].extend(sorted(glob.glob(os.path.join(dataroot_, "*"))))
             elif task_ == "deblur":
-                self.image_paths_lq[task_].extend(sorted(glob.glob(os.path.join(dataroot_, "*"))))
-                self.image_paths_hq[task_].extend(sorted(glob.glob(os.path.join(dataroot_, "*"))))
+                self.image_paths_lq[task_].extend(sorted(glob.glob(os.path.join(dataroot_, "lq", "*"))))
+                self.image_paths_hq[task_].extend(sorted(glob.glob(os.path.join(dataroot_, "hq", "*"))))
             elif task_ == "derain":
-                self.image_paths_lq[task_].extend(sorted(glob.glob(os.path.join(dataroot_, "*"))))
-                self.image_paths_hq[task_].extend(sorted(glob.glob(os.path.join(dataroot_, "*"))))
+                self.image_paths_lq[task_].extend(sorted(glob.glob(os.path.join(dataroot_, "lq", "*"))))
+                self.image_paths_hq[task_].extend(sorted(glob.glob(os.path.join(dataroot_, "hq", "*"))))
             elif task_ == "dehaze":
                 meta_info_file = os.path.join(dataroot_, "meta_info.txt")
                 with open(meta_info_file) as f:
