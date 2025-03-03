@@ -1,5 +1,7 @@
-accelerate==0.16.0
+accelerate==0.20.3
 transformers==4.31.0
-diffusers==0.16.0
-torch==1.10.0+cu113
-torchvision==0.11.0+cu113
+diffusers==0.33.0
+torch==2.3.0
+torchvision==0.16.0
+
+# docker env from pytorch 2.3.0

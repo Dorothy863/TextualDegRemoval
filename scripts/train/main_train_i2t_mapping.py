@@ -281,7 +281,7 @@ def parse_args():
         help="Pretrained tokenizer name or path if not the same as model_name",
     )
     parser.add_argument(
-        "--train_data_dir", type=list, default=None, required=True, help="A folder containing the training data."
+        "--train_data_dir", type=str, default=None, required=True, help="A csv path include the training data file name and title."
     )
     parser.add_argument(
         "--i2t_mapper_path", type=str, default=None, help="If not none, the training will start from the given checkpoints."
@@ -529,7 +529,7 @@ def main():
         gradient_accumulation_steps=args.gradient_accumulation_steps,
         mixed_precision=args.mixed_precision,
         log_with="tensorboard",
-        logging_dir=logging_dir,
+        project_dir=logging_dir,
     )
 
     # If passed along, set the training seed now.
@@ -565,7 +565,6 @@ def main():
 
     mapper = Mapper(input_dim=1280, output_dim=1024, num_words=args.num_words)
 
-    vae = AutoencoderKL.from_pretrained(args.pretrained_stable_diffusion_path, subfolder="vae")
     unet = UNet2DConditionModel.from_pretrained(args.pretrained_stable_diffusion_path, subfolder="unet")
 
     # modified
@@ -610,6 +609,8 @@ def main():
 
                 _module.add_module('to_k_global', getattr(mapper, f'{_name.replace(".", "_")}_to_k'))
                 _module.add_module('to_v_global', getattr(mapper, f'{_name.replace(".", "_")}_to_v'))
+                
+    vae = AutoencoderKL.from_pretrained(args.pretrained_stable_diffusion_path, subfolder="vae")
 
     # Freeze vae and unet, encoder
     freeze_params(vae.parameters())
@@ -638,7 +639,7 @@ def main():
 
     # 修改后的初始化方式
     train_dataset = UnpairedLQHQDataset(
-        csv_path="your_dataset.csv",  # 替换为实际路径
+        csv_path=args.train_data_dir,  # 替换为实际路径
         tokenizer=tokenizer,
         size=args.resolution,
         placeholder_token=args.placeholder_token

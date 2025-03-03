@@ -7,13 +7,13 @@
             "request": "launch",
             "program": "${workspaceFolder}/scripts/train/main_train_i2t_mapping.py",
             "args": [
-                "--pretrained_stable_diffusion_path=./stable-diffusion-2-1-base",
-                "--pretrained_clip_model_path=./clip-vit-large-patch14",
+                "--pretrained_stable_diffusion_path=/workspace/sd_models/stable-diffusion-2-1-base",
+                "--pretrained_clip_model_path=/workspace/sd_models/CLIP-ViT-H-14-laion2B-s32B-b79K",
                 "--num_words=20",
-                "--train_data_dir=./datasets/train.csv",  // 修改为CSV路径
+                "--train_data_dir=/workspace/datasets/SD_Rest/daclip_train.csv",  // 修改为CSV路径
                 "--placeholder_token=S",
                 "--resolution=512",
-                "--train_batch_size=4",
+                "--train_batch_size=1",
                 "--gradient_accumulation_steps=4",
                 "--max_train_steps=200000",
                 "--learning_rate=1e-06",
@@ -21,7 +21,6 @@
                 "--lr_scheduler=constant",
                 "--lr_warmup_steps=0",
                 "--output_dir=./experiments/tr_mapping",
-                "--i2t_mapper_path=./pretrained/mapper.pt",
                 "--save_steps=200"
             ],
             "env": {
