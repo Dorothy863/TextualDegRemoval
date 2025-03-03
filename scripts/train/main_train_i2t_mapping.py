@@ -636,8 +636,9 @@ def main():
 
     noise_scheduler = DDIMScheduler.from_config(args.pretrained_stable_diffusion_path, subfolder="scheduler")
 
+    # 修改后的初始化方式
     train_dataset = UnpairedLQHQDataset(
-        dataroot_list=args.train_data_dir,
+        csv_path="your_dataset.csv",  # 替换为实际路径
         tokenizer=tokenizer,
         size=args.resolution,
         placeholder_token=args.placeholder_token

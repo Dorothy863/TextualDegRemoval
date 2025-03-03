@@ -1,0 +1,41 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Train i2t mapping",  // 配置名称
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/scripts/train/main_train_i2t_mapping.py",
+            "args": [
+                "--pretrained_stable_diffusion_path=./stable-diffusion-2-1-base",
+                "--pretrained_clip_model_path=./clip-vit-large-patch14",
+                "--num_words=20",
+                "--train_data_dir=./datasets/train.csv",  // 修改为CSV路径
+                "--placeholder_token=S",
+                "--resolution=512",
+                "--train_batch_size=4",
+                "--gradient_accumulation_steps=4",
+                "--max_train_steps=200000",
+                "--learning_rate=1e-06",
+                "--scale_lr",
+                "--lr_scheduler=constant",
+                "--lr_warmup_steps=0",
+                "--output_dir=./experiments/tr_mapping",
+                "--i2t_mapper_path=./pretrained/mapper.pt",
+                "--save_steps=200"
+            ],
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}"  // 确保项目根目录在路径中
+            },
+            "console": "integratedTerminal",
+            "justMyCode": false  // 支持调试第三方库
+        },
+        {
+            "name": "Python Debugger: Current File",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${file}",
+            "console": "integratedTerminal"
+        }
+    ]
+}
