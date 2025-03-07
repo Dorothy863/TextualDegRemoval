@@ -15,7 +15,7 @@ import torch.utils.checkpoint
 from accelerate import Accelerator
 from accelerate.logging import get_logger
 from accelerate.utils import set_seed
-from diffusers import AutoencoderKL, DDPMScheduler, UNet2DConditionModel, LMSDiscreteScheduler, DDIMScheduler
+from diffusers import AutoencoderKL, DDPMScheduler, UNet2DConditionModel, LMSDiscreteScheduler, DDIMScheduler, PNDMScheduler
 from diffusers.optimization import get_scheduler
 from huggingface_hub import HfFolder, Repository, whoami
 
@@ -34,6 +34,7 @@ from transformers import CLIPTextModel, CLIPTokenizer, CLIPVisionModel
 from typing import Optional, Tuple, Union
 
 from data.guidance_generation_dataset import PairedLQHQDataset, UnpairedLQHQDataset
+from datetime import datetime
 
 
 # modified
@@ -415,7 +416,7 @@ def unfreeze_params(params):
 
 
 def th2image(image):
-    image = (image / 2 + 0.5).clamp(0, 1)
+    image = ((image + 1) / 2).clamp(0, 1)
     image = image.detach().cpu().permute(1, 2, 0).numpy()
     image = (image * 255).round().astype("uint8")
     return Image.fromarray(image)
@@ -442,7 +443,7 @@ def validation(example,
     #     num_train_timesteps=1000,
     # )
 
-    scheduler = DDIMScheduler.from_pretrained(pretrained_path, subfolder="scheduler")
+    scheduler = PNDMScheduler.from_pretrained(pretrained_path, subfolder="scheduler")
 
     uncond_input = tokenizer(
         [''] * example["pixel_values"].shape[0],
@@ -464,7 +465,7 @@ def validation(example,
         )
 
     latents = latents.to(example["pixel_values_clip"])
-    scheduler.set_timesteps(100)
+    scheduler.set_timesteps(25)
     latents = latents * scheduler.init_noise_sigma
 
     placeholder_idx = example["index"]
@@ -686,7 +687,8 @@ def main():
     # The trackers initialize automatically on the main process.
     if accelerator.is_main_process:
         # accelerator.init_trackers("elite", config=vars(args))
-        accelerator.init_trackers("elite")
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        accelerator.init_trackers(f"train_i2t_mapping_{timestamp}", config=vars(args))
 
     # Train!
     total_batch_size = args.train_batch_size * accelerator.num_processes * args.gradient_accumulation_steps
@@ -699,9 +701,14 @@ def main():
     logger.info(f"  Gradient Accumulation steps = {args.gradient_accumulation_steps}")
     logger.info(f"  Total optimization steps = {args.max_train_steps}")
     # Only show the progress bar once on each machine.
-    progress_bar = tqdm(range(args.max_train_steps), disable=not accelerator.is_local_main_process)
+    if args.i2t_mapper_path is not None:
+        global_step = int(args.i2t_mapper_path.split('_')[-1].
+                          replace(".pt", ""))
+    else:
+        global_step = 0
+    progress_bar = tqdm(total=args.max_train_steps, initial=global_step, disable=not accelerator.is_local_main_process)
     progress_bar.set_description("Steps")
-    global_step = 0
+    
 
     for epoch in range(args.num_train_epochs):
         mapper.train()
@@ -709,7 +716,7 @@ def main():
             with accelerator.accumulate(mapper):
                 # Convert images to latent space
                 # stable diffusion input
-                latents = vae.encode(batch["pixel_values"]).latent_dist.sample().detach()
+                latents = vae.encode(batch["pixel_values_vae_gt"]).latent_dist.sample().detach()
                 latents = latents * 0.18215
 
                 # Sample noise that we'll add to the latents
@@ -725,9 +732,9 @@ def main():
                 noisy_latents = noise_scheduler.add_noise(latents, noise, timesteps)
 
                 placeholder_idx = batch["index"]
-                image = F.interpolate(batch["pixel_values_clip"], (224, 224), mode='bilinear')
+                # image = F.interpolate(batch["pixel_values_clip"], (224, 224), mode='bilinear')
 
-                image_features = image_encoder(image, output_hidden_states=True)
+                image_features = image_encoder(batch["pixel_values_clip"], output_hidden_states=True)
                 # image_embeddings = [image_features[0], image_features[2][4], image_features[2][8], image_features[2][12], image_features[2][16]]
                 image_embeddings = [image_features[0]]
                 image_embeddings = [emb.detach() for emb in image_embeddings]
@@ -768,7 +775,7 @@ def main():
                                             unet, mapper, vae, batch["pixel_values_clip"].device, 5,
                                             pretrained_path=args.pretrained_stable_diffusion_path)
 
-                    gt_images = [th2image(img) for img in batch["pixel_values"]]
+                    gt_images = [th2image(img) for img in batch["pixel_values_vae"]]
                     img_list = []
                     for syn, gt in zip(syn_images, gt_images):
                         img_list.append(np.concatenate((np.array(syn), np.array(gt)), axis=1))

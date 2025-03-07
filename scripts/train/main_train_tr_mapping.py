@@ -15,7 +15,7 @@ import torch.utils.checkpoint
 from accelerate import Accelerator
 from accelerate.logging import get_logger
 from accelerate.utils import set_seed
-from diffusers import AutoencoderKL, DDPMScheduler, UNet2DConditionModel, LMSDiscreteScheduler, DDIMScheduler
+from diffusers import AutoencoderKL, DDPMScheduler, UNet2DConditionModel, LMSDiscreteScheduler, DDIMScheduler, PNDMScheduler
 from diffusers.optimization import get_scheduler
 from huggingface_hub import HfFolder, Repository, whoami
 
@@ -35,6 +35,7 @@ from typing import Optional, Tuple, Union
 
 
 from data.guidance_generation_dataset import PairedLQHQDataset, UnpairedLQHQDataset
+from datetime import datetime
 
 # modified
 class Mapper(nn.Module):
@@ -275,15 +276,15 @@ def inj_forward_crossattention(self, hidden_states, encoder_hidden_states=None, 
 logger = get_logger(__name__)
 
 
-def save_progress(mapper, accelerator, args, step=None):
+def save_progress(clean_mapper, accelerator, args, step=None):
     logger.info("Saving embeddings")
 
-    state_dict = accelerator.unwrap_model(mapper).state_dict()
+    state_dict = accelerator.unwrap_model(clean_mapper).state_dict()
 
     if step is not None:
-        torch.save(state_dict, os.path.join(args.output_dir, f"mapper_{str(step).zfill(6)}.pt"))
+        torch.save(state_dict, os.path.join(args.output_dir, f"clean_mapper_{str(step).zfill(6)}.pt"))
     else:
-        torch.save(state_dict, os.path.join(args.output_dir, "mapper.pt"))
+        torch.save(state_dict, os.path.join(args.output_dir, "clean_mapper.pt"))
 
 
 def parse_args():
@@ -321,13 +322,13 @@ def parse_args():
         help="Pretrained tokenizer name or path if not the same as model_name",
     )
     parser.add_argument(
-        "--train_data_dir", type=list, default=None, required=True, help="A folder containing the training data."
+        "--train_data_dir", type=str, default=None, required=True, help="A folder containing the training data."
     )
 
     # *
-    parser.add_argument(
-        "--task_list", type=list, default=None, required=True, help="A folder containing the training data task name."
-    )
+    # parser.add_argument(
+    #     "--task_list", type=list, default=None, required=True, help="A folder containing the training data task name."
+    # )
 
     parser.add_argument(
         "--i2t_mapper_path", type=str, default=None, help="If not none, the training will start from the given checkpoints."
@@ -486,7 +487,7 @@ def validation(example,
                seed=None,
                pretrained_path="./stable-diffusion-2-1-bsae"):
 
-    scheduler = DDIMScheduler.from_pretrained(pretrained_path, subfolder="scheduler")
+    scheduler = PNDMScheduler.from_pretrained(pretrained_path, subfolder="scheduler")
 
     uncond_input = tokenizer(
         [''] * example["pixel_values"].shape[0],
@@ -508,7 +509,7 @@ def validation(example,
         )
 
     latents = latents.to(example["pixel_values_clip"])
-    scheduler.set_timesteps(100)
+    scheduler.set_timesteps(25)
     latents = latents * scheduler.init_noise_sigma
 
     placeholder_idx = example["index"]
@@ -574,7 +575,7 @@ def main():
         gradient_accumulation_steps=args.gradient_accumulation_steps,
         mixed_precision=args.mixed_precision,
         log_with="tensorboard",
-        logging_dir=logging_dir,
+        project_dir=logging_dir,
     )
 
     # If passed along, set the training seed now.
@@ -656,9 +657,11 @@ def main():
 
                 _module.add_module('to_k_global', getattr(mapper, f'{_name.replace(".", "_")}_to_k'))
                 _module.add_module('to_v_global', getattr(mapper, f'{_name.replace(".", "_")}_to_v'))
+    else:
+        raise ValueError("i2t_mapper_path is required")
 
-    if args.textual_restoration_mapper_path is not None:
-        clean_mapper.load_state_dict(torch.load(args.textual_restoration_mapper_path, map_location='cpu'))
+    if args.tr_mapper_path is not None:
+        clean_mapper.load_state_dict(torch.load(args.tr_mapper_path, map_location='cpu'))
 
     # Freeze vae and unet, encoder
     freeze_params(vae.parameters())
@@ -677,7 +680,7 @@ def main():
 
     # Initialize the optimizer
     optimizer = torch.optim.AdamW(
-        itertools.chain(mapper.parameters()),  # only optimize the embeddings
+        itertools.chain(clean_mapper.parameters()),  # only optimize the embeddings
         lr=args.learning_rate,
         betas=(args.adam_beta1, args.adam_beta2),
         weight_decay=args.adam_weight_decay,
@@ -687,9 +690,8 @@ def main():
     noise_scheduler = DDIMScheduler.from_config(args.pretrained_stable_diffusion_path, subfolder="scheduler")
 
     # todo dataset
-    train_dataset = PairedLQHQDataset(
-        task_list=args.task_list,
-        dataroot_list=args.train_data_dir,
+    train_dataset = UnpairedLQHQDataset(
+        csv_path=args.train_data_dir,
         tokenizer=tokenizer,
         size=args.resolution,
         placeholder_token=args.placeholder_token,
@@ -711,8 +713,8 @@ def main():
         num_training_steps=args.max_train_steps * args.gradient_accumulation_steps,
     )
 
-    mapper, optimizer, train_dataloader, lr_scheduler = accelerator.prepare(
-        mapper, optimizer, train_dataloader, lr_scheduler
+    clean_mapper, optimizer, train_dataloader, lr_scheduler = accelerator.prepare(
+        clean_mapper, optimizer, train_dataloader, lr_scheduler
     )
 
     # Move vae, unet, and encoders to device
@@ -720,10 +722,13 @@ def main():
     unet.to(accelerator.device)
     image_encoder.to(accelerator.device)
     text_encoder.to(accelerator.device)
+    mapper.to(accelerator.device)
     # Keep vae, unet and image_encoder in eval model as we don't train these
     vae.eval()
     unet.eval()
     image_encoder.eval()
+    text_encoder.eval()
+    mapper.eval()
 
     # We need to recalculate our total training steps as the size of the training dataloader may have changed.
     num_update_steps_per_epoch = math.ceil(len(train_dataloader) / args.gradient_accumulation_steps)
@@ -736,7 +741,8 @@ def main():
     # The trackers initialize automatically on the main process.
     if accelerator.is_main_process:
         # accelerator.init_trackers("elite", config=vars(args))
-        accelerator.init_trackers("elite")
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        accelerator.init_trackers(f"train_tr_mapping_{timestamp}", config=vars(args))
 
     # Train!
     total_batch_size = args.train_batch_size * accelerator.num_processes * args.gradient_accumulation_steps
@@ -749,17 +755,21 @@ def main():
     logger.info(f"  Gradient Accumulation steps = {args.gradient_accumulation_steps}")
     logger.info(f"  Total optimization steps = {args.max_train_steps}")
     # Only show the progress bar once on each machine.
-    progress_bar = tqdm(range(args.max_train_steps), disable=not accelerator.is_local_main_process)
+    if args.tr_mapper_path is not None:
+        global_step = int(args.tr_mapper_path.split('_')[-1].
+                          replace(".pt", ""))
+    else:
+        global_step = 0
+    progress_bar = tqdm(total=args.max_train_steps, initial=global_step, disable=not accelerator.is_local_main_process)
     progress_bar.set_description("Steps")
-    global_step = 0
 
     for epoch in range(args.num_train_epochs):
-        mapper.train()
+        clean_mapper.train()
         for step, batch in enumerate(train_dataloader):
-            with accelerator.accumulate(mapper):
+            with accelerator.accumulate(clean_mapper):
                 # Convert images to latent space
                 # stable diffusion input
-                latents = vae.encode(batch["pixel_values"]).latent_dist.sample().detach()
+                latents = vae.encode(batch["pixel_values_vae_gt"]).latent_dist.sample().detach()
                 latents = latents * 0.18215
 
                 # Sample noise that we'll add to the latents
@@ -775,9 +785,9 @@ def main():
                 noisy_latents = noise_scheduler.add_noise(latents, noise, timesteps)
 
                 placeholder_idx = batch["index"]
-                image = F.interpolate(batch["pixel_values_clip"], (224, 224), mode='bilinear')
+                # image = F.interpolate(batch["pixel_values_clip"], (224, 224), mode='bilinear')
 
-                image_features = image_encoder(image, output_hidden_states=True)
+                image_features = image_encoder(batch["pixel_values_clip"], output_hidden_states=True)
                 # image_embeddings = [image_features[0], image_features[2][4], image_features[2][8], image_features[2][12], image_features[2][16]]
                 image_embeddings = [image_features[0]]
                 image_embeddings = [emb.detach() for emb in image_embeddings]
@@ -803,7 +813,7 @@ def main():
                 accelerator.backward(loss)
 
                 if accelerator.sync_gradients:
-                    accelerator.clip_grad_norm_(mapper.parameters(), 1)
+                    accelerator.clip_grad_norm_(clean_mapper.parameters(), 1)
 
                 optimizer.step()
                 lr_scheduler.step()
@@ -814,12 +824,12 @@ def main():
                 progress_bar.update(1)
                 global_step += 1
                 if global_step % args.save_steps == 0:
-                    save_progress(mapper, accelerator, args, global_step)
+                    save_progress(clean_mapper, accelerator, args, global_step)
                     syn_images = validation(batch, tokenizer, image_encoder, text_encoder,
                                             unet, mapper, clean_mapper, vae, batch["pixel_values_clip"].device, 5,
                                             pretrained_path=args.pretrained_stable_diffusion_path)
 
-                    gt_images = [th2image(img) for img in batch["pixel_values"]]
+                    gt_images = [th2image(img) for img in batch["pixel_values_vae"]]
                     img_list = []
                     for syn, gt in zip(syn_images, gt_images):
                         img_list.append(np.concatenate((np.array(syn), np.array(gt)), axis=1))
@@ -839,7 +849,7 @@ def main():
         accelerator.wait_for_everyone()
 
     if accelerator.is_main_process:
-        save_progress(mapper, accelerator, args)
+        save_progress(clean_mapper, accelerator, args)
 
     accelerator.end_training()
 

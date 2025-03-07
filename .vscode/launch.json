@@ -7,21 +7,23 @@
             "request": "launch",
             "program": "${workspaceFolder}/scripts/train/main_train_i2t_mapping.py",
             "args": [
-                "--pretrained_stable_diffusion_path=/workspace/sd_models/stable-diffusion-2-1-base",
-                "--pretrained_clip_model_path=/workspace/sd_models/CLIP-ViT-H-14-laion2B-s32B-b79K",
+                "--pretrained_stable_diffusion_path=/data/coding/upload-data/data/adrive/stable-diffusion-2-1-base",
+                "--pretrained_clip_model_path=/data/coding/upload-data/data/adrive/CLIP-ViT-H-14-laion2B-s32B-b79K",
                 "--num_words=20",
-                "--train_data_dir=/workspace/datasets/SD_Rest/daclip_train.csv",  // 修改为CSV路径
+                "--train_data_dir=/data/coding/daclip_train.csv",  // 修改为CSV路径
                 "--placeholder_token=S",
                 "--resolution=512",
                 "--train_batch_size=1",
                 "--gradient_accumulation_steps=4",
-                "--max_train_steps=200000",
-                "--learning_rate=1e-06",
+                "--max_train_steps=800000",
+                "--learning_rate=1e-07",
                 "--scale_lr",
                 "--lr_scheduler=constant",
                 "--lr_warmup_steps=0",
-                "--output_dir=./experiments/tr_mapping",
-                "--save_steps=200"
+                "--output_dir=./experiments/i2t_mapping",
+                "--save_steps=800",
+                "--i2t_mapper_path=./experiments/i2t_mapping/mapper_003200.pt",  // Restore the i2t mapper path
+                "--logging_dir=logs"
             ],
             "env": {
                 "PYTHONPATH": "${workspaceFolder}"  // 确保项目根目录在路径中
@@ -30,11 +32,49 @@
             "justMyCode": false  // 支持调试第三方库
         },
         {
+            "name": "Python: Train TR Mapping",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "scripts/train/main_train_tr_mapping.py",
+            "args": [
+                "--pretrained_stable_diffusion_path=/data/coding/upload-data/data/adrive/stable-diffusion-2-1-base",
+                "--pretrained_clip_model_path=/data/coding/upload-data/data/adrive/CLIP-ViT-H-14-laion2B-s32B-b79K",
+                "--num_words=20",
+                "--train_data_dir=/data/coding/daclip_train.csv",
+                // "--task_list=task_name_aligned_with_datadir",
+                "--placeholder_token=S",
+                "--resolution=512",
+                "--train_batch_size=1",
+                "--gradient_accumulation_steps=4",
+                "--max_train_steps=800000",
+                "--learning_rate=1e-06",
+                "--scale_lr",
+                "--lr_scheduler=constant",
+                "--lr_warmup_steps=0",
+                "--output_dir=./experiments/tr_mapping",
+                "--i2t_mapper_path=/data/coding/TextualDegRemoval/experiments/i2t_mapping/mapper_002400.pt",
+                // "--tr_mapper_path=path_to_trained_tr_mapper_path",
+                "--logging_dir=logs",
+                "--save_steps=800"
+            ],
+            "env": {
+                // 如果需要指定GPU设备，取消下方注释并修改值
+                // "CUDA_VISIBLE_DEVICES": "0,1,2,3"
+                "PYTHONPATH": "${workspaceFolder}"
+            },
+            "justMyCode": false,
+            "console": "integratedTerminal"
+        },
+        {
             "name": "Python Debugger: Current File",
             "type": "debugpy",
             "request": "launch",
             "program": "${file}",
-            "console": "integratedTerminal"
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}"
+            }
         }
     ]
 }
